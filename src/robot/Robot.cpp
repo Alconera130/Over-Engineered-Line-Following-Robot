@@ -125,6 +125,7 @@ void Robot::pollConsole() {
             case 'C': startCalibration(); break;
             case 'x':
             case 'X':
+                faultRestartPending_ = false;
                 motors_.emergencyStop();
                 controller_.reset();
                 setState(sensors_.calibrationValid() ? RobotState::WAIT_START

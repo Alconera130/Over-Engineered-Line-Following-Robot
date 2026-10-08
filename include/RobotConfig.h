@@ -33,7 +33,7 @@ namespace cfg {
 
     // The sensor output's electrical direction is fixed by the X16 hardware. Set
     // this false if telemetry shows a white surface reads lower than a black one.
-    constexpr bool kSensorOutputIncreasesWithReflectance = true;
+    constexpr bool kSensorOutputIncreasesWithReflectance = false;
     // Selected line colour when automatic polarity switching is disabled.
     constexpr bool kDefaultLineIsDark = true;
     // Enable only on courses that change between dark-on-light and light-on-dark.

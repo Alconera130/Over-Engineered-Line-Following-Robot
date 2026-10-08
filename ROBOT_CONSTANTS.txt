@@ -50,7 +50,7 @@ to TB6612 VM; the software cannot infer motor voltage from its RPM rating.
 3. SENSOR AND CALIBRATION SETTINGS
 ----------------------------------
 
-kSensorOutputIncreasesWithReflectance = true
+kSensorOutputIncreasesWithReflectance = false
     Set false if measured ADC readings fall as a white surface gets brighter.
 kDefaultLineIsDark = true         true = dark line, false = light line
 kEnableAutomaticPolarity = false  allow automatic switch between both modes
