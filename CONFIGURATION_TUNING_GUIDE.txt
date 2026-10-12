@@ -1,0 +1,213 @@
+LINE FOLLOWER CONFIGURATION AND KINEMATICS GUIDE
+================================================
+
+The complete active constant list, current defaults, and units are in
+ROBOT_CONSTANTS.txt. This guide explains what the important groups mean and how
+to tune them on the finished chassis.
+
+1. SENSOR MEASUREMENT AND CENTROID
+----------------------------------
+
+The Linea Viper X16 contains sixteen reflectance sensors. Its mux selects one
+sensor at a time, and the ESP32 reads the common analog output. Calibration
+records a low and high raw reading for each sensor; each reading is then mapped
+to a normalized 0..1000 response. This per-channel scaling matters because LED
+brightness, sensor gain, height, and surface texture are rarely identical over
+the whole board.
+
+For sensor i, the firmware assigns a position from -7500 at the left edge to
++7500 at the right edge. The line centroid is the strength-weighted average:
+
+    position = sum(lineStrength[i] * sensorPosition[i]) /
+               sum(lineStrength[i])
+
+A centroid uses all response strengths, not only the strongest sensor. That
+means it can describe a line moving between adjacent channels smoothly. The
+sensor groups are also segmented separately; the segment lock chooses the
+group nearest the last tracked position so another nearby track does not pull
+the steering average across the gap.
+
+Calibration must include both the line and the floor beneath every sensor. If a
+single channel has little measured range, its normalized response carries
+little information and the firmware rejects the calibration. Keep the sensor
+height and angle fixed after calibration. Reflectance changes quickly with
+height, so a flexible mount can look like a changing line to the controller.
+
+2. DIFFERENTIAL-DRIVE KINEMATICS
+-------------------------------
+
+For a two-wheel chassis with left and right wheel speeds vL and vR, and wheel
+separation b, the ideal no-slip motion is:
+
+    forward speed v = (vR + vL) / 2
+    yaw rate        w = (vR - vL) / b
+    turn radius     R = v / w
+
+If both wheels move equally, yaw rate is zero and the chassis goes straight. If
+one wheel slows or reverses, the speed difference rotates the chassis. The
+Viper is mounted ahead of the axle, so it sees a curve before the axle reaches
+it. That look-ahead distance gives time to correct, but greater distance also
+makes the sensor's lateral motion larger for a given chassis rotation.
+
+The firmware commands PWM, not wheel speed. PWM is an open-loop voltage
+request. Actual wheel speed varies with motor winding resistance, battery
+voltage, load, motor temperature, and traction. The same PWM pair may therefore
+produce different yaw rates on a full and nearly empty battery. The motor slew
+limiter smooths requested changes, but it cannot regulate actual speed.
+
+Encoders let the firmware close an inner speed loop around each wheel. The line
+PID can then act as an outer loop: it requests a desired left/right speed split,
+and the inner loops make those wheel speeds repeatable. This is why encoders
+improve turn timing and battery-to-battery consistency more than simply
+increasing the line PID gains.
+
+3. PID AND THE SPEED PROFILE
+----------------------------
+
+The controller uses normalized lateral error e (from -1 to +1). In simplified
+form, its differential correction is:
+
+    correction = P*e + I*sum(e*dt) + D*(change in e / dt)
+
+The measured loop interval dt keeps the derivative and integral terms consistent
+when mux reads or serial output take slightly different time. The derivative is
+filtered because a raw derivative magnifies sensor noise. More filtering makes
+steering calmer but adds lag; too little filtering can make motor commands
+chatter.
+
+Integral action helps compensate for persistent wheel mismatch or a constant
+mechanical bias. It is not a substitute for correcting a loose wheel or badly
+aligned sensor. The integral is bounded, and this firmware suspends accumulation
+when the correction is saturated in the same direction as the error. Without
+that anti-windup rule, the controller can store a large correction while the
+motors cannot apply it, then over-correct after the line returns.
+
+Tune on a clear, wide track at low speed:
+
+1. Set I to zero. Raise P until the robot corrects firmly, then reduce it if it
+   weaves across a straight line.
+2. Raise D gradually to damp that weave. If motors chatter on a smooth line,
+   lower D or increase derivative filtering.
+3. Add a small I only if a steady left/right bias remains after mechanical
+   alignment and motor direction are checked.
+4. Increase cruise PWM gradually. Keep corner PWM low enough for the tyres to
+   follow the curve without sliding sideways.
+5. Check the motor deadband. If a wheel does not turn at a small command, the
+   configured minimum PWM raises every nonzero command. This creates a minimum
+   usable speed; it also means a configured corner request below that floor is
+   not the actual applied PWM.
+
+The configured starting gains are P=75, I=0, D=2.5. While the robot is running,
+send `g P I D` followed by Enter in the 115200-baud serial monitor to change
+them live; for example, `g 75 0 2.5`. Each gain must be between 0 and 500. The
+robot prints the accepted gains, and telemetry reports the current `kp`, `ki`,
+and `kd`. These trial gains reset to the configured values at the next run.
+
+6. Timed track actions use elapsed milliseconds from the start of the run,
+   including start-zone exit. A scheduled speed percentage scales PID and short-gap
+   bridge commands until the next speed event; timed turns and recovery
+   maneuvers retain their tuned PWM and durations. SET_PID_GAINS changes the
+   full P/I/D triplet for the remainder of that run; the configured defaults
+   return on the next run. ENABLE_JUNCTION_ROUTING and
+   DISABLE_JUNCTION_ROUTING turn route selection on or off at their scheduled
+   times. With `kStraightThroughWhenJunctionRoutingDisabled = true`, disabled
+   routing drives straight through detected branches without consuming route
+   entries; any route turn already underway switches to straight. STOP ends the
+   run. The current schedule is disabled and contains a far-future placeholder.
+   To ignore route actions from 5 to 15 seconds, replace the placeholder with:
+
+       {5000U, TrackTimeCommand::DISABLE_JUNCTION_ROUTING, 0, 0.0F, 0.0F, 0.0F},
+       {15000U, TrackTimeCommand::ENABLE_JUNCTION_ROUTING, 0, 0.0F, 0.0F, 0.0F},
+
+   Set `kEnableTrackTimeActions = true` to run the schedule. Speed percentage
+   scales PWM requests, not measured wheel speed. Battery voltage, load, and
+   motor deadband mean 70% PWM does not guarantee 70% vehicle speed. Validate
+   each event on the course before relying on it.
+
+The speed profile lowers forward PWM when lateral error or filtered derivative
+gets large. This trades some speed for time to steer. A high PID correction at
+high forward speed can exceed the available tyre grip; more gain cannot overcome
+that physical limit.
+
+4. JUNCTIONS, SHARP TURNS, AND ZIGZAGS
+--------------------------------------
+
+The route list is consumed at detected wide junctions and, when enabled, at
+sustained one-sided edge turns. At a wide junction, the robot drives through
+the short entry interval, then checks the newer sensor frame
+before selecting the requested branch. If that branch still is not visible,
+the planner falls back to a visible branch. The built-in LED gives one brief
+flash when a wide junction or confirmed 90-degree turn is detected; the flash
+does not encode the selected direction. After a left or right turn, the firmware waits for a centered narrow
+line before resuming PID; a wide horizontal junction bar alone no longer counts
+as reacquisition.
+
+Zigzags and acute bends are normally handled continuously by PID and do not
+consume route entries. Keep `kEnableSharpTurnRouting = false` to prevent a
+confirmed one-sided bend from starting a timed route maneuver while routing is
+enabled; the detector still gives the single LED flash. Set it to true only
+when one-sided 90-degree turns should consume `kRoute` entries. When
+When junction routing is disabled, `kStraightThroughWhenJunctionRoutingDisabled`
+defaults to true and crosses a detected junction/edge turn straight without
+consuming a route entry. Disabling routing during an in-progress route turn
+also changes that maneuver to straight and restores its route entry. The
+separate sharp-turn detector looks
+for an extreme centroid, one active array edge, weak
+centre response, a narrow sensor group, and several confirming frames. These
+filters reduce false route turns on short edge excursions. A transverse line
+array cannot always distinguish a very sharp zigzag from a 90-degree route
+corner; the current detector uses three confirming frames and starts at position
+5200. Adjust the confirmation-frame count and speed for the actual course.
+
+For a tighter routed turn, use `JunctionAction::ACUTE_LEFT` or
+`JunctionAction::ACUTE_RIGHT` in `kRoute`. These use
+`kAcuteTurnOutsidePwm`/`kAcuteTurnInsidePwm` instead of the normal turn PWM.
+They use their own `kAcuteMinimumTurnMs` before checking for line reacquisition
+and `kAcuteMaximumTurnMs` timeout before path recovery. Tune those PWM and time
+values on the actual chassis and keep PWM magnitudes at or below `kMotorMaxPwm`;
+increasing turn drive or duration can make the robot overshoot a branch.
+
+5. GAPS, LOSS, AND PATH MEMORY
+------------------------------
+
+For a short gap, the firmware briefly drives forward with a reduced version of
+the last steering correction. This is a simple prediction: it assumes the
+unseen line continues in roughly the same direction. The current bridge limit
+is 110 ms. A long bridge interval can make a dead end look like a gap, so keep
+this near the longest real break at the chosen speed. With path recovery
+disabled, the robot enters `FAULT` and stops its motors when the bridge expires
+without a line being detected. Telemetry's `vis` field shows whether the sensor
+classifier currently considers a line visible; if the robot keeps driving with
+`vis=1` after leaving the track, recheck sensor calibration, line polarity, and
+the active threshold before increasing the bridge timeout.
+
+If path recovery is enabled, the robot rotates toward the last observed side
+and scans for a line after the bridge expires. If dead-end return is also
+enabled, a longer loss briefly backs up, then starts a timed U-turn. Since
+there are no encoders, this turn depends on battery voltage,
+wheel slip, and chassis geometry. The short path stack stores choices and can
+select another visible branch after a return, but it is not a global map of the
+course. Identical-looking intersections and loops cannot be disambiguated by a
+forward-facing line sensor alone.
+
+Set path recovery false to stop when the line is lost. Dead-end return is a
+separate option and only runs while path recovery is enabled.
+
+6. ELECTRICAL AND MECHANICAL TUNING
+----------------------------------
+
+The X16 analog output must not exceed 3.3 V at the ESP32 ADC. Share a ground
+reference among the ESP32, sensor array, and motor driver. Keep mux wiring and
+ADC leads away from motor current wiring; motor commutation noise can move the
+measured centroid even though the line did not move.
+
+The TB6612 logic VCC and motor VM are separate supplies. Confirm the motor
+voltage and stall current before connecting the 3-cell LiPo to VM. A motor's RPM
+rating does not state its voltage. Check the exact CN3903 board's input range and
+output current too; module markings and board layouts vary.
+
+Mount the sensor rigidly, square to the robot centreline, and slightly ahead of
+the axle. Set positive motor command so both wheels drive forward. If one wheel
+is reversed, correct its motor leads or direction mapping before changing the
+PID sign. Test turns, gap recovery, and dead-end return at low speed on a clear
+floor before increasing cruise PWM.

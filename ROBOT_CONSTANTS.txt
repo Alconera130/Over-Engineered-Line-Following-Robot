@@ -1,0 +1,219 @@
+ESP32-C3 LINE FOLLOWER CONSTANTS
+================================
+
+Edit include/RobotConfig.h, rebuild, and upload to change compile-time values.
+This file records the settings currently present in that header. The project
+targets the ESP32-C3 Mini.
+Units are shown beside each value. These are starting values; sensor height,
+track width, wheel diameter, motor voltage, motor deadband, and course material
+change the correct tuning for the finished robot.
+
+1. ACTIVE ESP32-C3 PIN MAP
+-------------------------
+
+kViperAdcPin = 4                  Viper SIGOUT, ADC1_CH4 input
+kMuxSelectPins = {3, 2, 1, 5}    Viper S0, S1, S2, S3
+kStartButtonPin = 9              START button to GND, active low
+kStatusLedPin = 8                common C3 Mini built-in LED GPIO
+kStatusLedActiveLow = true       LOW turns the LED on
+kLeftIn1Pin = 7                  TB6612 AIN1
+kLeftIn2Pin = 6                  TB6612 AIN2
+kLeftPwmPin = 10                 TB6612 PWMA
+kRightIn1Pin = 20                TB6612 BIN1
+kRightIn2Pin = 21                TB6612 BIN2
+kRightPwmPin = 0                 TB6612 PWMB
+kMotorStandbyPin = -1            STBY is expected to be wired high to 3.3 V
+
+GPIO2, GPIO8, and GPIO9 are C3 boot-strapping pins. GPIO2 is wired to mux S0;
+keep it high during reset with a pull-up. GPIO9 is START; holding START during
+reset can select the ROM download mode before firmware begins. GPIO8 is the
+common built-in active-low LED pin and is only driven after startup. GPIO0
+carries PWMB but is not a strapping pin. GPIO20/21 are UART0 pins; the profile
+uses native USB.
+
+2. COMMON MOTOR SETTINGS
+------------------------
+
+kLeftPwmChannel = 0              ESP32 LEDC channel
+kRightPwmChannel = 1             ESP32 LEDC channel
+kMotorPwmHz = 20000              PWM frequency, Hz
+kMotorPwmResolution = 8          bits; command scale is 0..255
+kMotorMaxPwm = 255               absolute signed motor command limit
+kMotorMinimumPwm = 20            minimum nonzero PWM, measured motor deadband
+kMotorSlewPwmPerSecond = 500000  maximum command ramp rate, PWM units/second
+
+The minimum PWM is applied to every nonzero command. A requested nonzero
+command below 20 is raised to 20 by the driver. Zero remains zero. Confirm both
+motors' rated voltage and stall current before connecting the 3-cell LiPo
+to TB6612 VM; the software cannot infer motor voltage from its RPM rating.
+
+3. SENSOR AND CALIBRATION SETTINGS
+----------------------------------
+
+kSensorOutputIncreasesWithReflectance = false
+    Set false if measured ADC readings fall as a white surface gets brighter.
+kDefaultLineIsDark = true         true = dark line, false = light line
+kEnableAutomaticPolarity = false  allow automatic switch between both modes
+kPolaritySwitchConfirmFrames = 5  consistent frames before polarity switch
+kPolaritySwitchScoreMargin = 90   minimum candidate-score advantage
+kNominalLineMaximumSensors = 6    nominal active sensor count for classifier
+kUniformBackgroundSensors = 13    near-full array count penalty
+kSamplesPerSensor = 2             averaged ADC conversions after mux settling
+kMuxSettleUs = 4                  delay after changing mux address
+kMinimumCalibrationSpan = 120     minimum raw ADC range for every channel
+kSensorFilterAlpha = 0.48         first-order sensor smoothing coefficient
+kActiveThreshold = 180            normalized response, range 0..1000
+kLineVisibleStrength = 75         minimum mean response to consider line visible
+kBranchThreshold = 620             edge/branch response threshold, range 0..1000
+kJunctionActiveSensors = 7        number of active sensors for a wide path
+
+Calibration duration is 4800 ms. Every 600 ms the robot reverses the sweep
+direction; calibration turn command is 66 PWM. Calibration is saved to NVS with
+a CRC check only when every channel observes enough range.
+
+4. LINE SEGMENT LOCK AND SHARP TURNS
+------------------------------------
+
+kEnableLineSegmentLock = true
+kLineSegmentMergeGapSensors = 1   inactive channels allowed inside a segment
+kLineLockMaximumPositionJump = 3200 X16 centroid units
+kEnableSharpTurnRouting = false  keep one-sided turns under PID control
+kSharpTurnPositionLimit = 5200    centroid units from centre
+kSharpTurnReleasePosition = 4200  re-arm distance from centre
+kSharpTurnCenterMaximum = 380     normalized response, sensors 7 or 8
+kSharpTurnMaximumActiveSensors = 5 maximum active sensors in sharp-turn group
+kSharpTurnConfirmFrames = 3       sustained edge frames before detection/flash
+
+The sharp-turn detector requires exactly one array edge, an extreme centroid,
+weak centre response, and repeated frames. These conditions reduce false turns
+on short zigzags but cannot perfectly distinguish every zigzag from a 90-degree
+corner using a transverse line sensor alone.
+
+5. LINE CONTROLLER AND SPEED PROFILE
+------------------------------------
+
+kPidP = 75.0                     proportional gain
+kPidI = 0.0                      integral gain
+kPidD = 2.5                      derivative gain
+kDerivativeFilter = 0.72         derivative smoothing coefficient
+kIntegralLimit = 0.55            integral limit, normalized-error seconds
+PID correction is no longer capped separately; each wheel command is still
+bounded by kMotorMaxPwm = 255 before it reaches the motor driver.
+kCruisePwm = 30                  straight-line forward PWM
+kCornerPwm = 30                  curve-profile forward PWM request
+kDerivativeSlowdown = 0.15       influence of filtered derivative on speed
+
+The line position is normalized from -7500..7500 to -1..1. The PID updates
+using measured elapsed time, with dt clamped to 1..50 ms. Integral accumulation
+is bounded and suspended when it would push a saturated output farther into
+saturation. Begin tuning with I=0; tune P, then D, then add only needed I.
+
+6. START ZONE AND ROUTE
+-----------------------
+
+kEnableStartZoneExit = true
+kStartExitPwm = 30                straight PWM while leaving start marker
+kStartExitTimeoutMs = 1800        fail-safe timeout
+kStartExitMaximumActiveSensors = 6 narrow-line count
+kStartExitConfirmFrames = 3       consecutive narrow frames
+
+kEnableJunctionRouting = true   route planner starts enabled each run
+kStraightThroughWhenJunctionRoutingDisabled = true
+                                  cross detected branches straight while routing is off
+kRoute = {LEFT, RIGHT, RIGHT, LEFT} repeated route actions; edit this list
+          supported actions: LEFT, RIGHT, STRAIGHT, ACUTE_LEFT, ACUTE_RIGHT
+kRouteLength = 4                  derived from the route list
+kJunctionEntryMs = 38             forward entry time before turning
+kStraightTraverseMs = 105         forward traversal duration
+kMinimumTurnMs = 45               minimum time before checking reacquisition
+kMaximumTurnMs = 700              turn timeout before line recovery
+kAcuteMinimumTurnMs = 30          acute-turn minimum before checking reacquisition
+kAcuteMaximumTurnMs = 160         acute-turn timeout before line recovery
+kTurnLedPulseMs = 120             one LED flash for a junction/90-degree detection
+kJunctionEntryPwm = 50            entry and straight traversal PWM
+kTurnOutsidePwm = 120             turn's outer-wheel PWM
+kTurnInsidePwm = -80              turn's inner-wheel reverse PWM
+kAcuteTurnOutsidePwm = 200        outer-wheel PWM for acute route actions
+kAcuteTurnInsidePwm = -160        inner-wheel reverse PWM for acute route actions
+kTurnReacquirePosition = 2500     centre tolerance, X16 position units
+
+kEnableTrackTimeActions = false   enable scheduled route/speed/PID/stop commands
+kTrackTimeEvents = {
+  {4294967295, STOP, 0, 0, 0, 0}            disabled-schedule placeholder; replace when enabled
+}
+Track-time routing commands: ENABLE_JUNCTION_ROUTING, DISABLE_JUNCTION_ROUTING
+kTrackTimeEventCount = 1           one far-future placeholder event
+Track time starts when a run begins, including start-zone exit.
+Schedule events must be listed in increasing time order. Speed events use the
+third field and persist until another speed event. PID events use the last
+three fields (P/I/D) and reset the integral accumulator; active gains persist
+for that run and return to configured defaults on the next run. STOP ends the
+run and returns the robot to WAIT_START.
+
+An unavailable route choice falls back to a visible branch. Wide junctions
+allow LEFT, RIGHT, or STRAIGHT. One-sided sharp turns use LEFT/RIGHT only.
+Route index restarts at zero on every new run.
+
+The speed percentage scales normal PID following and short-gap bridge commands.
+Timed junction, recovery, and dead-end maneuvers retain their tuned PWM and
+durations. The motor minimum-PWM clamp still applies, so a slowdown is limited
+if the scaled command falls below kMotorMinimumPwm.
+
+7. BROKEN LINE, RECOVERY, AND DEAD END
+--------------------------------------
+
+kBrokenLineBridgeMs = 110         maximum short gap bridge before fault/search
+kGapBridgePwm = kCornerPwm        bridge forward PWM uses corner-speed setting
+kGapCorrectionScale = 0.65        fraction of last steering correction
+kEnablePathRecovery = false       stop/fault after the short-gap bridge expires
+kRecoveryBeforeDeadEndMs = 360    delay before optional U-turn
+kRecoveryTimeoutMs = 900          maximum normal recovery duration
+kRecoveryTurnPwm = 115            search yaw command
+kEnableDeadEndReturn = false     turn around after longer line loss
+kDeadEndBackupMs = 320            reverse briefly before turning
+kDeadEndBackupPwm = 90            reverse PWM request
+kDeadEndMinimumTurnMs = 330       minimum timed U-turn duration
+kDeadEndMaximumTurnMs = 1150      U-turn timeout
+kDeadEndTurnPwm = 128             U-turn yaw command
+kMaximumDeadEndReturns = 8        maximum attempts in a run
+kPathMemoryDepth = 16             retained junction choices
+
+Dead-end return only runs when both kEnablePathRecovery and
+kEnableDeadEndReturn are true. It is timed because this hardware has no wheel
+encoders. It is an approximate search maneuver, not guaranteed path planning.
+
+8. OPTIONAL STOP LINE AND BUTTON
+--------------------------------
+
+kEnableStopLine = false
+kStopActiveSensors = 13           active channel count threshold
+kStopStrength = 760               mean line response, 0..1000
+kStopHoldMs = 180                 required continuous detection
+kLongPressMs = 1000               long press threshold
+kStartButtonDebounceMs = 30       contact debounce interval
+kStartDoubleTapWindowMs = 400     second tap window for FAULT restart choice
+kStartButtonReleaseArmMs = 60     stable release required after reset
+kTelemetryIntervalMs = 100        serial telemetry period
+
+Every button command takes effect on the stable release edge. Short release
+starts or stops; a one-second hold and release calibrates while idle. In FAULT,
+one tap resumes from the saved route position after the double-tap window;
+double tapping within the window restarts the route sequence from its beginning.
+
+9. FIXED REPRESENTATION AND SERVICE VALUES
+-------------------------------------------
+
+kViperSensorCount = 16            number of sensor channels
+kPositionLimit = 7500             centroid at either outermost sensor
+kMaximumLineSegments = 8          fixed array capacity for separated groups
+Sensor strength scale = 0..1000
+ADC resolution = 12 bits          raw reading nominally 0..4095
+One ADC conversion is discarded after changing mux address
+Serial monitor speed = 115200 baud
+Calibration NVS magic = 0x58313643 ("X16C")
+Calibration format version = 2
+Calibration CRC = CRC-16/CCITT polynomial 0x1021, initial value 0xFFFF
+
+Motor kinematics use differential PWM requests, not measured wheel speed. Motor
+RPM, track width, wheel diameter, tyre grip, and actual wheel speed are not
+constants the firmware can know until they are measured or read from hardware.
