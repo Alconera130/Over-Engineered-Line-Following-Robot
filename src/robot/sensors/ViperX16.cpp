@@ -263,6 +263,7 @@ void ViperX16::read(SensorFrame& frame) {
 	frame = *current;
 	for (uint8_t i = 0; i < kViperSensorCount; ++i) {
 		frame.raw[i] = raw[i];
+		frame.reflectance[i] = normaliseReflectance(i, raw[i]);
 	}
 	frame.polarityChanged = changed;
 	if (frame.lineVisible) {

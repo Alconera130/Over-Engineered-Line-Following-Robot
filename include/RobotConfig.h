@@ -11,14 +11,23 @@
 
 namespace cfg
 {
-    // GPIO2, GPIO8, and GPIO9 are strapping pins on the ESP32-C3. GPIO8 also
-    // drives the common active-low built-in LED on C3 Mini boards.
-    // Keep GPIO2 high at reset and avoid holding START low while resetting.
+    // GPIO2, GPIO8, and GPIO9 are strapping pins on the ESP32-C3. The compact
+    // OLED shares GPIO8/9 with the onboard LED and BOOT button: GPIO8 is SCL,
+    // GPIO9 is SDA/START. Power the OLED at 3.3 V so its I2C pull-ups hold both
+    // straps high at reset. Release BOOT after startup before the button arms.
     constexpr uint8_t kViperAdcPin = 4;                 // ADC1_CH4, Viper mux SIG/OUT
     constexpr uint8_t kMuxSelectPins[4] = {3, 2, 1, 5}; // Viper S0..S3
     constexpr uint8_t kStartButtonPin = 9;              // START button to GND; boot strap
-    constexpr int8_t kStatusLedPin = 8;
-    constexpr bool kStatusLedActiveLow = true;
+    constexpr uint8_t kOledSdaPin = 9;                   // Shared open-drain line with BOOT/START
+    constexpr uint8_t kOledSclPin = 8;                   // OLED clock; onboard LED may load/flicker on this pin
+    constexpr uint8_t kOledI2cAddress = 0x3C;
+    constexpr uint16_t kOledSurfaceThreshold = 500;      // 0=black, 1000=white after calibration
+    constexpr uint16_t kOledRenderIntervalMs = 100;
+    constexpr uint16_t kOledPageWriteIntervalMs = 60;
+    constexpr uint16_t kOledJunctionMessageMs = 1000;
+
+    static_assert(kOledSdaPin == kStartButtonPin,
+                  "OLED SDA intentionally shares the active-low BOOT/START button.");
 
     constexpr uint8_t kLeftIn1Pin = 7;      // TB6612 AIN1
     constexpr uint8_t kLeftIn2Pin = 6;      // TB6612 AIN2
@@ -194,7 +203,6 @@ namespace cfg
     constexpr uint16_t kAcuteMaximumTurnMs = 150;
     static_assert(kAcuteMinimumTurnMs <= kAcuteMaximumTurnMs,
                   "Acute minimum turn time must not exceed its timeout.");
-    constexpr uint16_t kTurnLedPulseMs = 120; // one LED flash per detected event
     constexpr int16_t kJunctionEntryPwm = 50;
     constexpr int16_t kTurnOutsidePwm = 120;
     constexpr int16_t kTurnInsidePwm = -80;

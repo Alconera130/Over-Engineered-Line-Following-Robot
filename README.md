@@ -71,6 +71,7 @@ GPIO2, GPIO8, and GPIO9 are ESP32-C3 boot-strapping pins. GPIO2 connects to mux 
 ### Power notes
 
 - TB6612 `VCC` is logic power (3.3 V here); `VM` is the motor supply and must be wired separately to a supply suitable for the motors. The code cannot determine the unknown motor voltage or stall current. Confirm both from the motor label or datasheet before applying the 3-cell LiPo to `VM`; 2000 RPM alone does not identify a safe voltage.
+- TB6612 `STBY` must be high for the configured short-brake state. This build leaves `kMotorStandbyPin = -1` because `STBY` is wired to 3.3 V; when a motor command reaches zero, firmware drives that channel's `IN1` and `IN2` high to short-brake instead of coasting.
 - The buck converter's exact CN3903 board ratings vary. Verify that the specific module accepts a fully charged 3-cell LiPo input and can supply the ESP32, sensors, and driver logic without brownout. Join logic ground, sensor ground, and driver ground.
 - Keep motor current paths away from the ADC/mux wiring. The bulk capacitor should be close to the motor driver's motor supply pins, with appropriate polarity and voltage rating. The 2200 µF capacitor across the battery terminals helps with transients; it does not replace local decoupling at the driver.
 - A 1 kΩ resistor across an 11.1 V pack draws about 11 mA continuously (about 13 mA at 12.6 V), so check its power rating and whether that standby drain is intended.

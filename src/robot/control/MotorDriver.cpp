@@ -46,9 +46,10 @@ void MotorDriver::writeMotor(uint8_t in1, uint8_t in2, uint8_t channel,
                              float speed) {
     int16_t pwm = static_cast<int16_t>(fabsf(speed) + 0.5F);
     if (pwm == 0) {
-        digitalWrite(in1, LOW);
-        digitalWrite(in2, LOW);  // coast; use HIGH/HIGH only if the driver brakes
-        ledcWrite(channel, 0);
+        // TB6612FNG: IN1=IN2=HIGH with STBY=HIGH selects short brake.
+        digitalWrite(in1, HIGH);
+        digitalWrite(in2, HIGH);
+        ledcWrite(channel, cfg::kMotorMaxPwm);
         return;
     }
 
@@ -82,14 +83,10 @@ void MotorDriver::update(uint32_t nowUs) {
 void MotorDriver::emergencyStop() {
     targetLeft_ = targetRight_ = actualLeft_ = actualRight_ = 0.0F;
 
-    digitalWrite(cfg::kLeftIn1Pin, LOW);
-    digitalWrite(cfg::kLeftIn2Pin, LOW);
-    digitalWrite(cfg::kRightIn1Pin, LOW);
-    digitalWrite(cfg::kRightIn2Pin, LOW);
     if (cfg::kMotorStandbyPin >= 0) {
-        digitalWrite(cfg::kMotorStandbyPin, LOW);
+        digitalWrite(cfg::kMotorStandbyPin, HIGH);
     }
-    
-    ledcWrite(cfg::kLeftPwmChannel, 0);
-    ledcWrite(cfg::kRightPwmChannel, 0);
+
+    writeMotor(cfg::kLeftIn1Pin, cfg::kLeftIn2Pin, cfg::kLeftPwmChannel, 0.0F);
+    writeMotor(cfg::kRightIn1Pin, cfg::kRightIn2Pin, cfg::kRightPwmChannel, 0.0F);
 }

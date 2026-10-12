@@ -15,6 +15,7 @@ bool StartButton::poll(uint32_t& heldMs) {
     const uint32_t now = millis();
 
     if (!armed_) {
+        rawDown_ = rawDown;
         if (rawDown) {
             releaseSeen_ = false;
         } else if (!releaseSeen_) {

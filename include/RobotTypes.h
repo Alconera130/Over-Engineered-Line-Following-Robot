@@ -65,6 +65,7 @@ struct LineSegment {
 
 struct SensorFrame {
     uint16_t raw[kViperSensorCount];
+    uint16_t reflectance[kViperSensorCount]; // calibrated surface brightness: 0=dark, 1000=bright
     uint16_t line[kViperSensorCount];  // 0 = floor, 1000 = line
     // Full-array centroid. It remains useful for polarity and junction
     // recognition; normal steering instead uses the locked segment centroid.

@@ -11,6 +11,9 @@ public:
     void retryLastChoice();
     JunctionAction choose(const SensorFrame& frame, bool returningFromDeadEnd,
                          bool sharpTurnOnly = false);
+    JunctionAction peekNextAction() const;
+    uint8_t peekNextRouteSlot() const;
+    uint8_t previousRouteSlot() const;
 
 private:
     bool available(JunctionAction action, const SensorFrame& frame,

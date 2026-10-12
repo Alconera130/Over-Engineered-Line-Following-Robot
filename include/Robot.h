@@ -14,6 +14,7 @@
 #include "navigation/RoutePlanner.h"
 #include "navigation/SegmentTracker.h"
 #include "navigation/SharpTurnHandler.h"
+#include "system/OledDisplay.h"
 #include "system/StartButton.h"
 #include "system/TrackTimer.h"
 #include "sensors/ViperX16.h"
@@ -48,8 +49,7 @@ private:
     void fault(const __FlashStringHelper* reason);
     void setState(RobotState state);
     bool isRunningState() const;
-    void updateStatusLed();
-    void setStatusLed(bool on);
+    void updateDisplay(uint32_t nowMs);
     void showStatus() const;
     void emitTelemetry();
     const __FlashStringHelper* stateName() const;
@@ -58,6 +58,7 @@ private:
     MotorDriver motors_;
     LineController controller_;
     StartButton button_;
+    OledDisplay display_;
     TrackTimer trackTimer_;
     CalibrationSweep calibration_;
     RoutePlanner route_;
@@ -77,17 +78,18 @@ private:
     uint32_t lostSinceMs_ = 0;
     uint32_t stopSinceMs_ = 0;
     uint32_t lastTelemetryMs_ = 0;
+    uint32_t lastIdleSensorReadMs_ = 0;
     uint32_t lastControlUs_ = 0;
-    uint32_t turnLedStartedMs_ = 0;
+    uint32_t junctionMessageStartedMs_ = 0;
     int16_t lastSeenPosition_ = 0;
     uint8_t startExitNarrowFrames_ = 0;
 
     bool telemetryEnabled_ = false;
+    bool sensorFrameValid_ = false;
     bool junctionRoutingEnabled_ = cfg::kEnableJunctionRouting;
     bool junctionLocked_ = false;
     bool returningFromDeadEnd_ = false;
-    bool statusLedOn_ = false;
-    bool turnLedPulseActive_ = false;
+    bool junctionMessageActive_ = false;
     bool routeChoicePending_ = false;
     bool routeSelectionPending_ = false;
     bool junctionWasReturningFromDeadEnd_ = false;

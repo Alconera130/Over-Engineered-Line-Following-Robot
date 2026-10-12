@@ -10,6 +10,7 @@ public:
     void start(uint32_t nowMs);
     bool poll(uint32_t nowMs, TrackTimeEvent& event);
     uint32_t elapsedMs(uint32_t nowMs) const;
+    const TrackTimeEvent* peekNextEvent() const;
     uint8_t speedPercent() const { return speedPercent_; }
 
 private:

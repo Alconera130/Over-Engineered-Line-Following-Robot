@@ -40,3 +40,9 @@ bool TrackTimer::poll(uint32_t nowMs, TrackTimeEvent& event) {
 uint32_t TrackTimer::elapsedMs(uint32_t nowMs) const {
     return active_ ? nowMs - startedMs_ : 0U;
 }
+
+const TrackTimeEvent* TrackTimer::peekNextEvent() const {
+    return nextEvent_ < cfg::kTrackTimeEventCount
+               ? &cfg::kTrackTimeEvents[nextEvent_]
+               : nullptr;
+}

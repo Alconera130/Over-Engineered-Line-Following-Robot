@@ -33,6 +33,20 @@ void RoutePlanner::retryLastChoice() {
     }
 }
 
+JunctionAction RoutePlanner::peekNextAction() const {
+    return cfg::kRoute[routeIndex_ % cfg::kRouteLength];
+}
+
+uint8_t RoutePlanner::peekNextRouteSlot() const {
+    return static_cast<uint8_t>(routeIndex_ % cfg::kRouteLength) + 1U;
+}
+
+uint8_t RoutePlanner::previousRouteSlot() const {
+    return routeIndex_ == 0
+               ? cfg::kRouteLength
+               : static_cast<uint8_t>((routeIndex_ - 1U) % cfg::kRouteLength) + 1U;
+}
+
 JunctionAction RoutePlanner::choose(const SensorFrame& frame, bool returningFromDeadEnd,
                                     bool sharpTurnOnly) {
     JunctionAction action;

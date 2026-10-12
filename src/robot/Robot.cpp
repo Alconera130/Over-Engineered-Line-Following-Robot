@@ -23,14 +23,16 @@ void Robot::begin() {
     diagnostics::port().begin(115200);
     controller_.resetGains();
     button_.begin();
-    digitalWrite(cfg::kStatusLedPin, cfg::kStatusLedActiveLow ? HIGH : LOW);
-    pinMode(cfg::kStatusLedPin, OUTPUT);
-    setStatusLed(false);
-
     motors_.begin();
     sensors_.begin();
+    display_.begin();
     state_ = sensors_.calibrationValid() ? RobotState::WAIT_START
                                           : RobotState::CALIBRATION_REQUIRED;
+    if (sensors_.calibrationValid()) {
+        sensors_.read(lastFrame_);
+        sensorFrameValid_ = true;
+    }
+    lastIdleSensorReadMs_ = millis();
     stateStartedMs_ = millis();
     lastControlUs_ = micros();
 
@@ -66,7 +68,15 @@ void Robot::update() {
         case RobotState::FAULT: break;
     }
 
-    updateStatusLed();
+    const uint32_t nowMs = millis();
+    if (!isRunningState() && state_ != RobotState::CALIBRATING &&
+        sensors_.calibrationValid() &&
+        nowMs - lastIdleSensorReadMs_ >= cfg::kOledRenderIntervalMs) {
+        sensors_.read(lastFrame_);
+        sensorFrameValid_ = true;
+        lastIdleSensorReadMs_ = nowMs;
+    }
+    updateDisplay(nowMs);
 }
 
 void Robot::pollButton() {
@@ -666,8 +676,8 @@ void Robot::updateJunction() {
 }
 
 void Robot::signalJunctionDetected() {
-    turnLedStartedMs_ = millis();
-    turnLedPulseActive_ = true;
+    junctionMessageStartedMs_ = millis();
+    junctionMessageActive_ = true;
 }
 
 void Robot::startRecovery() {
@@ -760,61 +770,64 @@ bool Robot::isRunningState() const {
            state_ == RobotState::LINE_RECOVERY || state_ == RobotState::DEAD_END_TURN;
 }
 
-void Robot::updateStatusLed() {
-    const uint32_t now = millis();
-    const uint32_t phase = now % 1200U;
-    bool on = false;
-
-    if (turnLedPulseActive_) {
-        const uint32_t elapsed = now - turnLedStartedMs_;
-        if (elapsed < cfg::kTurnLedPulseMs) {
-            setStatusLed(true);
-            return;
-        }
-        turnLedPulseActive_ = false;
+void Robot::updateDisplay(uint32_t nowMs) {
+    if (junctionMessageActive_ &&
+        nowMs - junctionMessageStartedMs_ >= cfg::kOledJunctionMessageMs) {
+        junctionMessageActive_ = false;
     }
 
-    if (!on && !button_.armed()) {
-        on = ((now / 125U) & 1U) == 0U;
-    } else if (!on) {
-        switch (state_) {
-            case RobotState::CALIBRATION_REQUIRED:
-                on = phase < 120U || (phase >= 240U && phase < 360U);
-                break;
-            case RobotState::WAIT_START:
-                on = phase < 90U;
-                break;
-            case RobotState::CALIBRATING:
-                on = ((now / 300U) & 1U) == 0U;
-                break;
-            case RobotState::START_EXIT:
-            case RobotState::RUNNING:
-            case RobotState::JUNCTION_ENTRY:
-            case RobotState::JUNCTION_TURN:
-            case RobotState::DEAD_END_TURN:
-                break;
-            case RobotState::LINE_RECOVERY:
-                on = ((now / 160U) & 1U) == 0U;
-                break;
-            case RobotState::FINISHED:
-                on = true;
-                break;
-            case RobotState::FAULT:
-                on = ((now / 120U) & 1U) == 0U;
-                break;
-        }
+    OledDisplayState view{};
+    view.sensors = &lastFrame_;
+    view.sensorDataValid = sensorFrameValid_ && sensors_.calibrationValid();
+    view.calibrationRequired = state_ == RobotState::CALIBRATION_REQUIRED;
+    view.calibrating = state_ == RobotState::CALIBRATING;
+    view.runActive = isRunningState();
+    view.elapsedMs = trackTimer_.elapsedMs(nowMs);
+    view.nextTrackEvent = trackTimer_.peekNextEvent();
+    view.trackTimeEnabled = cfg::kEnableTrackTimeActions;
+    view.junctionRoutingEnabled = junctionRoutingEnabled_;
+    view.junctionDetected = junctionMessageActive_;
+    switch (state_) {
+        case RobotState::CALIBRATION_REQUIRED:
+            view.statusMessage = "HOLD START TO CAL";
+            break;
+        case RobotState::WAIT_START:
+            view.statusMessage = "READY - PRESS START";
+            break;
+        case RobotState::CALIBRATING:
+            view.statusMessage = "CALIBRATION SWEEP";
+            break;
+        case RobotState::START_EXIT:
+            view.statusMessage = "CLEARING START";
+            break;
+        case RobotState::LINE_RECOVERY:
+            view.statusMessage = "LINE RECOVERY";
+            break;
+        case RobotState::DEAD_END_TURN:
+            view.statusMessage = "U TURN RECOVERY";
+            break;
+        case RobotState::FINISHED:
+            view.statusMessage = "FINISHED";
+            break;
+        case RobotState::FAULT:
+            view.statusMessage = "FAULT - TAP START";
+            break;
+        case RobotState::RUNNING:
+        case RobotState::JUNCTION_ENTRY:
+        case RobotState::JUNCTION_TURN:
+            break;
     }
-
-    setStatusLed(on);
-}
-
-void Robot::setStatusLed(bool on) {
-    if (statusLedOn_ == on) {
-        return;
+    view.routeActionCurrent = routeChoicePending_;
+    view.routeSlot = routeChoicePending_ ? route_.previousRouteSlot()
+                                         : route_.peekNextRouteSlot();
+    view.routeAction = routeChoicePending_ ? pendingTurn_ : route_.peekNextAction();
+    if (view.nextTrackEvent != nullptr) {
+        const uint32_t elapsed = trackTimer_.elapsedMs(nowMs);
+        view.timeToTrackEventMs = view.nextTrackEvent->atMs > elapsed
+                                      ? view.nextTrackEvent->atMs - elapsed
+                                      : 0U;
     }
-    statusLedOn_ = on;
-    const bool driveLow = on == cfg::kStatusLedActiveLow;
-    digitalWrite(cfg::kStatusLedPin, driveLow ? LOW : HIGH);
+    display_.update(nowMs, view, button_.isDown());
 }
 
 void Robot::showStatus() const {
