@@ -1,0 +1,161 @@
+LINE FOLLOWER CONFIGURATION AND KINEMATICS GUIDE
+================================================
+
+The active values live in include/RobotConfig.h. ROBOT_CONSTANTS.txt is the
+short pin and settings reference; this guide explains the sensor geometry,
+motion model, and tuning process.
+
+1. SENSOR MEASUREMENT AND CENTROID
+----------------------------------
+
+The Linea Viper X16 has sixteen reflectance sensors. The firmware changes the
+address pins of the sensor mux, waits for the analog signal to settle, and reads
+its shared output. Calibration records a low and high raw ADC value for every
+channel. Each reading is then normalized to reflectance from 0 (dark) to 1000
+(bright). Per-channel calibration compensates for differences in sensor gain,
+height, and illumination.
+
+The selected line polarity converts reflectance into line response: 0 means
+floor and 1000 means line. `kActiveThreshold` marks active sensors;
+`kBranchThreshold` is a stronger branch check. The current configuration uses
+a dark line, with automatic polarity changes disabled.
+
+Sensor i has a lateral position from about -7500 at the left edge to +7500 at
+the right edge. The centroid is a response-weighted average:
+
+    position = sum(lineResponse[i] * sensorPosition[i]) /
+               sum(lineResponse[i])
+
+This gives a smooth estimate as the line moves between sensors. The array also
+groups nearby active sensors into segments. A one-sensor gap may be merged so
+noise does not split one physical line into separate candidates. Segment
+tracking chooses the candidate nearest the previous position. With the current
+`kEnableLineSegmentLock = false`, steering still uses the full-array centroid;
+segment data continues to help detect branches and reacquire the line.
+
+Calibration needs every sensor to see both line and floor. A channel with too
+little measured range cannot distinguish those surfaces, so the full
+calibration is rejected. Keep sensor height and angle fixed after calibrating.
+
+2. DIFFERENTIAL-DRIVE KINEMATICS
+-------------------------------
+
+For left and right wheel speeds vL and vR and wheel spacing b, ideal no-slip
+differential-drive motion is:
+
+    forward speed v = (vR + vL) / 2
+    yaw rate        w = (vR - vL) / b
+    turn radius     R = v / w
+
+Equal wheel speeds produce straight travel. A speed difference rotates the
+chassis. Reversing one wheel while the other moves forward can produce a tight
+pivot. In practice, `MotorDriver` receives signed PWM requests rather than
+measured wheel speeds, so these equations describe the intended motion, not a
+measurement of what the robot actually did.
+
+The sensor array sits ahead of the axle. It sees a bend before the axle reaches
+it, giving the controller some look-ahead. As the chassis rotates, that offset
+also makes the sensor move sideways, so turn response depends on sensor-to-axle
+distance as well as track width and wheel speeds.
+
+PWM-to-speed conversion changes with battery voltage, motor load, wheel grip,
+and motor mismatch. The slew limiter smooths PWM requests but does not regulate
+wheel speed. Encoders would let each wheel use an inner speed-control loop;
+the line controller could then request a repeatable left/right speed split.
+That improves turns and battery-to-battery consistency more than simply
+increasing line PID gains.
+
+3. PID AND SPEED PROFILE
+------------------------
+
+The controller normalizes lateral error e to -1..1 and computes a steering
+correction:
+
+    correction = P*e + I*sum(e*dt) + D*(change in e / dt)
+
+The measured loop interval dt keeps the integral and derivative terms stable
+when sensor reads take slightly different time. The derivative is filtered to
+reduce noise. More filtering calms the steering but adds lag; too little can
+make commands chatter. The integral is bounded and paused when it would push a
+saturated wheel command further into saturation.
+
+The current starting gains are P=200, I=0, D=19. Tune on the finished chassis
+at low speed: keep I at zero, raise P until steering is firm, then back it down
+if the robot weaves. Add D gradually to damp the weave. Add only a small I if a
+persistent bias remains after checking wheel and sensor alignment. While the
+robot is running, `g P I D` applies gains live; gains return to the configured
+values at the next run.
+
+Forward PWM starts at `kCruisePwm` and decreases toward `kCornerPwm` when the
+line is far from centre or changing quickly. `kMotorMinimumPwm` raises small
+nonzero requests to the wheel's deadband. This creates a minimum usable speed,
+so a low requested corner speed may be raised by the motor driver.
+
+4. JUNCTIONS AND TRACK-TIME ACTIONS
+-----------------------------------
+
+Wide junction detection checks for a broad sensor response, enough active
+sensors in the tracked segment, and a connected run from the centre of the
+array. At a junction the robot advances through the entry interval, reads the
+branch again, then chooses the next `kRoute` action. If that branch is absent,
+it chooses a visible branch in left/straight/right order. A turned line must
+reacquire as a narrow, centred line; the wide crossbar alone does not count.
+
+`kEnableSharpTurnRouting = false` leaves confirmed one-sided edge turns under
+PID. The OLED reports `JUNCTION DETECTED` for either detection type, but that
+message does not identify the selected turn. Set sharp-turn routing to true if
+those turns should consume route entries.
+
+Track-time actions are measured from the run timer start. With
+`kEnableStartZoneExit = false`, that is immediately after START. When it is
+true, the robot clears the start marker, crosses the first detected wide
+junction straight without consuming a route entry, then starts the timer and
+TrackTime schedule. Route selection begins at the next junction.
+Keep `kTrackTimeEvents` in ascending `atMs` order. The current schedule sets
+speed to 50% at timer start, disables junction routing at 5700 ms, then enables
+it at 6200 ms. Speed events scale PID and short-gap bridge commands; timed turns
+keep their configured PWM and duration. PID events change all three gains for
+the rest of the run. A stop event returns the robot to `WAIT_START`.
+
+5. GAPS AND RECOVERY
+--------------------
+
+For up to `kBrokenLineBridgeMs`, the robot drives forward using a reduced copy
+of the last steering correction. This predicts that the unseen line continues
+in roughly the same direction. The current bridge limit is 250 ms. If
+`kEnablePathRecovery` is true, a longer loss starts a search toward the last
+observed line side. With recovery disabled, the robot stops and enters `FAULT`
+after the bridge expires.
+
+Optional dead-end return adds a short reverse and a timed U-turn. It is
+currently disabled. Without encoders, that turn depends on battery voltage,
+wheel slip, and chassis geometry. The path stack remembers recent branch
+choices, but it is not a global course map and cannot distinguish repeated
+identical intersections by itself.
+
+6. DISPLAY, BUTTON, AND DEBUGGING
+---------------------------------
+
+The OLED profile assumes a 128x32 SSD1306 at address 0x3C. It shows sensor
+states, elapsed time, the next scheduled event, and the next route maneuver.
+For one second after a junction/edge-turn detection, the route row displays
+`JUNCTION DETECTED`, then the route action returns. Other states show ready,
+calibration, recovery, finished, or fault messages.
+
+OLED SDA shares GPIO9 with the active-low BOOT/START button. Display writes
+pause while the button is held. OLED SCL uses GPIO8; the board's onboard LED
+may respond to clock pulses even though firmware no longer drives it as an LED.
+Remove that LED circuit or move SCL if the new board must eliminate the glow.
+
+Tap and release START to run or stop. Hold it for one second and release while
+idle to calibrate. In `FAULT`, one tap resumes the saved route after the
+double-tap interval; two quick taps restart the route. The USB console accepts
+`r` run, `c` calibrate, `m` manual calibration, `x` stop, `s` status, `t`
+telemetry, and `g P I D` for live gains. The `esp32-c3-viper-test` PlatformIO
+environment reads the mux without touching motor pins; keep motor power
+disconnected during that sensor diagnostic.
+
+When a robot behaves unexpectedly, inspect one stage at a time: raw readings,
+calibration spans, normalized line responses, centroid/active sensors, chosen
+route action, then wheel PWM requests. That sequence separates sensor
+misclassification from route-selection mistakes and motor response.

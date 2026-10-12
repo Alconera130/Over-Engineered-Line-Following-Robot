@@ -1,0 +1,124 @@
+ESP32-C3 LINE FOLLOWER — SETTINGS GUIDE
+=======================================
+
+The compile-time settings live in include/RobotConfig.h. That header is the
+source of truth; this file explains the pin groups, units, and control concepts.
+
+PIN MAP
+-------
+
+Viper X16 SIGOUT:      GPIO4 (ADC input)
+Viper X16 S0..S3:      GPIO3, GPIO2, GPIO1, GPIO5
+START/BOOT and OLED SDA: GPIO9
+OLED SCL:               GPIO8
+TB6612 AIN1/AIN2/PWMA: GPIO7, GPIO6, GPIO10
+TB6612 BIN1/BIN2/PWMB: GPIO20, GPIO21, GPIO0
+TB6612 STBY:            tied to 3.3 V (kMotorStandbyPin = -1)
+
+GPIO2, GPIO8, and GPIO9 are ESP32-C3 boot-strapping pins. OLED SDA shares
+GPIO9 with the active-low START/BOOT button. The display driver pauses I2C
+writes while the button is held. GPIO8 is the OLED clock; if the C3 board has
+an onboard LED on GPIO8, clock traffic may make it glow or flicker. Firmware
+does not drive that LED as a status indicator. Remove its LED/resistor or move
+SCL to another GPIO to eliminate the electrical interaction.
+
+SENSOR VALUES AND POSITION
+--------------------------
+
+The X16 is read through its 16:1 mux. After each address change, the firmware
+waits kMuxSettleUs, discards one ADC conversion, then averages kSamplesPerSensor
+samples. Calibration stores a low and high raw reading for every channel.
+
+Each calibrated sample is mapped to reflectance from 0 (dark) to 1000 (bright).
+The selected line polarity converts that into a line response from 0 (floor) to
+1000 (line). `kActiveThreshold` decides whether an individual sensor is active;
+`kBranchThreshold` is the stronger threshold used to confirm a branch.
+
+Sensor positions are spaced in units of about 1000, with the array centre near
+zero and the outer sensors near -7500 and +7500. The centroid is the response-
+weighted average of those positions. The PID receives that lateral position
+normalized to -1..1. This is a cross-track error measurement: the array sees
+where the line is across the robot, but it does not directly measure heading,
+forward distance, or the shape of the course ahead.
+
+`kLineSegmentMergeGapSensors` joins small inactive gaps when building a line
+segment. `kEnableLineSegmentLock` chooses whether steering follows the nearest
+segment centroid or the full-array centroid. Junction detection separately
+checks for a wide response and a connected run from the centre sensors.
+
+MOTOR CONTROL AND KINEMATICS
+---------------------------
+
+The controller combines proportional, integral, and filtered derivative terms
+to make a steering correction. It adds that correction to one wheel command and
+subtracts it from the other. Equal commands drive approximately straight;
+unequal commands create yaw. Reversing one wheel while the other moves forward
+allows a tighter pivot turn.
+
+This is differential-drive kinematics. If wheel speeds are vL and vR and the
+wheel spacing is b, forward speed is approximately (vR + vL) / 2 and yaw rate
+is approximately (vR - vL) / b. The firmware commands PWM, not measured wheel
+speed, so battery voltage, motor deadband, wheel diameter, grip, and chassis
+weight affect the real motion. Without encoders, timed turns and dead-end
+returns are open-loop estimates rather than measured angles or distances.
+
+`kCruisePwm` sets straight-line speed. `kCornerPwm` is the target speed as the
+line moves far from centre or changes quickly. `kMotorMinimumPwm` compensates
+for motor deadband, and `kMotorSlewPwmPerSecond` limits how quickly commands
+change. Tune these on the finished chassis; the same PWM can produce different
+wheel speeds on the two sides.
+
+ROUTE AND TRACK-TIME SCHEDULE
+-----------------------------
+
+`kRoute` is the repeated maneuver list used at wide junctions. If the requested
+branch is unavailable, the planner chooses a visible branch in left/straight/
+right order. Set `kEnableSharpTurnRouting` to true if confirmed one-sided turns
+should also consume route entries. `kEnableJunctionRouting` is the run-start
+default; a track-time event can enable or disable it temporarily.
+
+Track-time entries are ordered by elapsed milliseconds from the run timer start.
+Keep the array sorted by `atMs`; events are processed in list order. The current
+schedule sets speed to 50% at start, disables junction routing at 5700 ms, and
+enables it again at 6200 ms. Event payload fields are used as follows:
+
+If `kEnableStartZoneExit` is true, the robot clears the start marker and crosses
+the first detected wide junction straight. That gate crossing does not consume
+a `kRoute` entry; the timer and TrackTime schedule start after it, and route
+selection begins at the following junction. With the option false, timing starts
+immediately after START.
+
+SET_SPEED_PERCENT:        speedPercent
+SET_PID_GAINS:            pidP, pidI, pidD
+ENABLE/DISABLE_ROUTING:   no payload
+STOP:                     no payload
+
+Speed scaling applies to PID and short-gap bridge commands. Timed maneuvers keep
+their configured PWM and duration, so changing speed percentage does not change
+their turn timing.
+
+RECOVERY AND BUTTON
+-------------------
+
+The default profile bridges a missing line for kBrokenLineBridgeMs, then turns
+toward the last observed side while searching. If kEnablePathRecovery is false,
+the robot stops and faults after the bridge interval. Optional dead-end return
+adds a short reverse and timed U-turn; it depends on traction and battery level
+because no wheel encoders measure the turn.
+
+Tap and release START to run or stop. Hold it for one second and release while
+idle to calibrate. In FAULT, the first tap resumes the saved route after the
+double-tap window; tapping twice quickly restarts the route.
+
+OLED AND DIAGNOSTICS
+-------------------
+
+The current display profile assumes a 128x32 SSD1306 at I2C address 0x3C. It
+shows the 16 sensor states, elapsed time, the next scheduled event, and the
+next route action. A detected junction temporarily replaces the route row with
+`JUNCTION DETECTED`; state messages also identify ready, calibration, recovery,
+finished, and fault conditions.
+
+The standalone PlatformIO environment `esp32-c3-viper-test` builds
+src/viper_array_test.cpp. It reads the sensor mux without touching motor pins;
+keep motor power disconnected during that diagnostic.
